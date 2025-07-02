@@ -1,2 +1,4 @@
 *.pdf
 rent-agreement
+passkey.txt
+.venv
