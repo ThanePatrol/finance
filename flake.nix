@@ -29,6 +29,10 @@
             python312Packages.plotly
             sqlite
           ];
+          shellHook = ''
+            			source budget/.venv/bin/activate
+            			'';
+
         };
       }
     );
