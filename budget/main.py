@@ -1,4 +1,5 @@
 from getpass import getpass
+import time
 
 from ubank import Client, Passkey
 
@@ -21,25 +22,60 @@ assert PASSKEY_PATH
 con = sqlite3.connect(SQLITE_URL)
 cur = con.cursor()
 
-cur.execute("SELECT * FROM rent_payments")
-rows = cur.fetchall()
-print(rows)
+res = cur.execute("SELECT * FROM renter")
+plebs = res.fetchall()
+print(plebs)
 
+pleb_names = {}
+for pleb_name, pleb_id in plebs:
+    pleb_names[pleb_name] = pleb_id
+
+print(f"pleb_names={pleb_names}")
+
+all_transaction_ids = set(
+    cur.execute("SELECT transaction_id FROM rent_payments").fetchall()
+)
 
 # Load passkey from file.
 with open(PASSKEY_PATH, "rb") as f:
     passkey = Passkey.load(f, password=getpass("Enter ubank password: "))
 
+
 # Print account balances.
 with Client(passkey) as client:
-    for account in client.get_linked_banks().linkedBanks[0].accounts:
-        print(
-            f"{account.label} ({account.type}): {account.balance.available} {account.balance.currency}"
-        )
-
+    transactions_to_insert = []
+    now = int(time.time())
     for tran in client.search_account_transactions(
         account_id=HUGH_ACCOUNT_ID,
         bank_id=BANK_ID,
         customerId=CUSTOMER_ID,
     ).transactions:
-        print(tran)
+        if tran.id in all_transaction_ids:
+            continue
+        if not tran.from_ or not tran.from_.legalName:
+            print("transaction had no legal name")
+            continue
+        if not tran.value:
+            print(f"no fucking transaction value?????? {tran}")
+            continue
+
+        pleb_name = tran.from_.legalName
+        if pleb_name not in pleb_names:
+            continue
+
+        pleb_id = pleb_names[pleb_name]
+
+        payment_in_cents = int(float(tran.value.amount) * 100)
+
+        transactions_to_insert.append((pleb_id, payment_in_cents, now, tran.id))
+        print(f"about to save transaction {(pleb_id, payment_in_cents, now, tran.id)}")
+
+    cur.executemany(
+        """
+    INSERT INTO rent_payments VALUES (
+        ?, ?, ?, ?
+    );
+    """,
+        transactions_to_insert,
+    )
+    con.commit()

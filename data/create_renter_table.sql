@@ -3,7 +3,8 @@ CREATE TABLE rent_payments (
 	discord_id INTEGER,
 	amount INTEGER, -- in cents. Negative for a rent notice. ie they owe money. Positive if they have paid money
 	time INTEGER, -- time we sent a notification OR time we called the ubank API
-	transaction_id INTEGER -- 0 if it is our notice, else transaction ID of ubank
+	transaction_id INTEGER, -- 0 if it is our notice, else transaction ID of ubank
+	UNIQUE(transaction_id)
 );
 
 CREATE TABLE renter (

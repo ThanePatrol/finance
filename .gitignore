@@ -2,3 +2,5 @@
 rent-agreement
 passkey.txt
 .venv
+data/insert_pleb.sql
+data/finance.db
