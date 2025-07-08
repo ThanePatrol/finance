@@ -33,7 +33,17 @@
             			source budget/.venv/bin/activate
             			'';
 
+
         };
-      }
+      stdenv.mkDerivation {
+        name = "hello-flake-package";
+        src = ./.;
+        installPhase = ''
+          mkdir -p $out/bin
+          cp hello.sh $out/bin/hello.sh
+          chmod +x $out/bin/hello.sh
+        '';
+		};
+      };
     );
 }
