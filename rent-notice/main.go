@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +19,8 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 const (
@@ -30,9 +33,13 @@ type Config struct {
 	Bsb     string
 	UserId  string
 	Port    string
+	DBUrl   string
 }
 
-var conf Config
+var (
+	conf Config
+	db   *sql.DB
+)
 
 func init() {
 	account, ok := os.LookupEnv("ACCOUNT")
@@ -58,6 +65,13 @@ func init() {
 		slog.Info("listening on port", slog.String("port", port))
 		conf.Port = port
 	}
+
+	url, ok := os.LookupEnv("SQLITE_URL")
+	if !ok {
+		panic("could not read db url from env")
+	}
+	url = strings.ReplaceAll(url, `"`, "")
+	conf.DBUrl = url
 }
 
 type Renter struct {
@@ -120,6 +134,17 @@ func unixToStr(t int64) string {
 	return f
 }
 
+func saveRentToDB(ctx context.Context, uid, amt, curTime int64) error {
+	amtInCents := amt * 100
+	_, err := db.ExecContext(ctx, `INSERT INTO rent_payments VALUES (
+		?, ?, ?, ?
+	);`, uid, amtInCents, curTime, "")
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *Server) readSendRent(ctx context.Context, fp string) error {
 	var renter Renter
 	f, err := os.ReadFile(fp)
@@ -141,12 +166,19 @@ func (s *Server) readSendRent(ctx context.Context, fp string) error {
 	if err != nil {
 		return err
 	}
+
+	err = saveRentToDB(ctx, int64(renter.UserId), amountToPay, curTime)
+	if err != nil {
+		return err
+	}
+
 	oldTime := renter.TimeLastPaid
 	renter.TimeLastPaid = curTime
 	renterBytes, err := json.Marshal(renter)
 	if err != nil {
 		return err
 	}
+
 	slog.InfoContext(
 		ctx,
 		"sent renter with amount",
@@ -171,6 +203,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	err = s.readSendRent(r.Context(), string(bytedata))
 	if err != nil {
+		slog.ErrorContext(r.Context(), "could not process rent notification", slog.String("err", err.Error()))
 		http.Error(w, "could not send rent", http.StatusInternalServerError)
 		return
 	}
@@ -201,8 +234,15 @@ func main() {
 		slog.Error("error while building disgo", slog.Any("err", err))
 		return
 	}
-
 	defer client.Close(context.TODO())
+
+	slog.Info("about to open db", slog.String("url", conf.DBUrl))
+	db, err = sql.Open("sqlite3", conf.DBUrl)
+	if err != nil {
+		slog.Error("error while opening db", slog.Any("err", err))
+		return
+	}
+	defer db.Close()
 
 	if err = client.OpenGateway(context.TODO()); err != nil {
 		slog.Error("errors while connecting to gateway", slog.Any("err", err))

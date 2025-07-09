@@ -4,4 +4,4 @@ include .env
 export
 
 run-go:
-	go run main.go
+	go build main.go && go run main.go
