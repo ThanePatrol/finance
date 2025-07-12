@@ -1,5 +1,5 @@
 {
-  description = "Development shell with Plotly and Python 12";
+  description = "Development shell with python tools used random scripts and tax work";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/master";
@@ -29,9 +29,10 @@
             python312Packages.plotly
             sqlite
           ];
-			shellHook = ''
-			source .venv/bin/activate
-			'';
+          shellHook = ''
+            source .venv/bin/activate
+            export $(cat .env)
+          '';
 
         };
       }
