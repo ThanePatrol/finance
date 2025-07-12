@@ -6,3 +6,4 @@ data/insert_pleb.sql
 data/finance.db
 main
 *.csv
+*.xlsx

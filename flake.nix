@@ -19,6 +19,12 @@
           inherit system;
         };
 
+        pyPkgs = with pkgs.python312Packages; [
+          plotly
+          pandas
+          openpyxl
+        ];
+
       in
       with pkgs;
       {
@@ -26,9 +32,9 @@
           buildInputs = [
             python312
             uv
-            python312Packages.plotly
             sqlite
-          ];
+          ] ++ pyPkgs;
+
           shellHook = ''
             source .venv/bin/activate
             export $(cat .env)
