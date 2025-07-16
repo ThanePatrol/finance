@@ -23,6 +23,7 @@
           plotly
           pandas
           openpyxl
+          pip
         ];
 
       in
@@ -36,8 +37,10 @@
           ] ++ pyPkgs;
 
           shellHook = ''
+            echo "sourcing venv"
             source .venv/bin/activate
             export $(cat .env)
+            echo "sourced venv"
           '';
 
         };
