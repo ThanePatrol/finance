@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -124,7 +125,11 @@ func postRent(renter *Renter, amount int64, client bot.Client) error {
 	return err
 }
 
-type Server struct {
+type NoticeServer struct {
+	Client bot.Client
+}
+
+type RemindServer struct {
 	Client bot.Client
 }
 
@@ -135,7 +140,8 @@ func unixToStr(t int64) string {
 }
 
 func saveRentToDB(ctx context.Context, uid, amt, curTime int64) error {
-	amtInCents := amt * 100
+	// negative amount as they owe money
+	amtInCents := -1 * (amt * 100)
 	_, err := db.ExecContext(ctx, `INSERT INTO rent_payments VALUES (
 		?, ?, ?, ?
 	);`, uid, amtInCents, curTime, "")
@@ -145,7 +151,7 @@ func saveRentToDB(ctx context.Context, uid, amt, curTime int64) error {
 	return nil
 }
 
-func (s *Server) readSendRent(ctx context.Context, fp string) error {
+func (s *NoticeServer) readSendRent(ctx context.Context, fp string) error {
 	var renter Renter
 	f, err := os.ReadFile(fp)
 	if err != nil {
@@ -194,7 +200,7 @@ func (s *Server) readSendRent(ctx context.Context, fp string) error {
 	return nil
 }
 
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (s *NoticeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	bytedata, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -210,8 +216,68 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "sent rent to renter=%s", string(bytedata))
 }
 
+func (s *RemindServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	sqlStatement := `SELECT t.name, SUM(r.amount), t.discord_id, t.channel_id, r.time FROM rent_payments as r
+LEFT JOIN renter as t
+ON r.discord_id = t.discord_id
+GROUP BY r.discord_id;
+`
+
+	type user struct {
+		Name         string `db:"name"`
+		Amount       int64  `db:"amount"`
+		DiscordID    int64  `db:"discord_id"`
+		ChannelID    int64  `db:"channel_id"`
+		TimeLastPaid int64  `db:"time"`
+	}
+
+	renters := make([]*user, 0)
+	rows, _ := db.QueryContext(r.Context(), sqlStatement)
+	for rows.Next() {
+		us := &user{}
+		_ = rows.Scan(&us.Name, &us.Amount, &us.DiscordID, &us.ChannelID, &us.TimeLastPaid)
+
+		renters = append(renters, us)
+	}
+
+	now := time.Now().Unix()
+	message := `
+		# Rent Reminder Notice <@_USER>
+
+		This is an automated rent reminder. You still owe: _OWING
+
+        Please contact <@_DADDY> within 24 hours if there are any issues! 😋
+
+	`
+
+	for _, renter := range renters {
+		rentInDollar := int64(
+			math.Abs(float64(renter.Amount / 100)),
+		) // is negative in DB because they owe and DB stores in cents
+
+		if renter.TimeLastPaid+int64(24*time.Hour) <= now || rentInDollar < 10 {
+			continue
+		}
+		m := strings.Replace(message, "_USER", fmt.Sprintf("%d", renter.DiscordID), 1)
+		m = strings.Replace(m, "_OWING", fmt.Sprintf("%d", rentInDollar), 1)
+		m = strings.Replace(m, "_DADDY", conf.UserId, 1)
+		var err error
+		for range 3 {
+			_, err = s.Client.Rest().
+				CreateMessage(snowflake.ID(renter.ChannelID), discord.NewMessageCreateBuilder().SetContent(m).Build())
+			if err == nil {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+	}
+}
+
 func setupHTTPServer(client bot.Client) {
-	http.Handle("/", &Server{
+	http.Handle("/", &NoticeServer{
+		Client: client,
+	})
+	http.Handle("/remind", &RemindServer{
 		Client: client,
 	})
 	http.ListenAndServe(fmt.Sprintf(":%s", conf.Port), nil)

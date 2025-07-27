@@ -34,7 +34,6 @@ with open(PASSKEY_PATH, "rb") as f:
 def get_plebs() -> dict[str, int]:
     res = cur.execute("SELECT * FROM renter")
     plebs = res.fetchall()
-    print(plebs)
 
     pleb_info = {}
     for pleb_name, pleb_id in plebs:
@@ -43,18 +42,17 @@ def get_plebs() -> dict[str, int]:
     return pleb_info
 
 
-def get_all_transactions() -> list[str]:
-    res = cur.execute("SELECT transaction_id FROM transactions")
-    trans = res.fetchall()
-    return trans
-
-
-def get_all_transaction_ids() -> list[str]:
-    all_transaction_ids = set(
-        cur.execute("SELECT transaction_id FROM rent_payments").fetchall()
-    )
-    ids = [str(x) for x in all_transaction_ids if x]
+def get_all_ubank_transactions() -> list[str]:
+    ids = cur.execute("SELECT transaction_id FROM transactions").fetchall()
+    ids = [x[0] for x in ids if x[0] != "" and x[0] != "backfilling data"]
     return ids
+
+
+def get_all_transaction_ids() -> set[str]:
+    ids = cur.execute("SELECT transaction_id FROM rent_payments").fetchall()
+    # print(ids)
+    ids = [x[0] for x in ids if x[0] != "" and x[0] != "backfilling data"]
+    return set(ids)
 
 
 def store_pleb_transactions_in_db():
@@ -110,7 +108,7 @@ def get_all_bank_accounts():
 
 
 def store_saving_and_spend_transactions():
-    all_transaction_ids = get_all_transactions()
+    all_transaction_ids = get_all_ubank_transactions()
     with Client(passkey) as client:
         transactions_to_insert = []
         transactions = client.search_account_transactions(
@@ -159,8 +157,12 @@ def store_saving_and_spend_transactions():
 
 
 if __name__ == "__main__":
-    store_saving_and_spend_transactions()
+    # store_saving_and_spend_transactions()
 
-    get_all_bank_accounts()
+    # get_all_bank_accounts()
+    ids = get_all_transaction_ids()
+    print(len(ids))
 
-    # store_pleb_transactions_in_db()
+    store_pleb_transactions_in_db()
+    ids = get_all_transaction_ids()
+    print(len(ids))
