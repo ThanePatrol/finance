@@ -7,7 +7,8 @@ CREATE TABLE rent_payments (
 
 CREATE TABLE renter (
 	name TEXT, -- legal name of renter
-	discord_id INTEGER
+	discord_id INTEGER,
+	channel_id INTEGER
 );
 
 -- Option 1:
