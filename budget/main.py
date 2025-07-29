@@ -16,6 +16,8 @@ PASSKEY_PATH = os.environ.get("PASSKEY_PATH")
 UBANK_PASS = os.environ.get("UBANK_PASS")
 SHARED_SAVE_ACCOUNT_ID = os.environ.get("SHARED_SAVE_ACCOUNT_ID")
 SHARED_SPEND_ACCOUNT_ID = os.environ.get("SHARED_SPEND_ACCOUNT_ID")
+RENT_TABLE = "rent_payments"
+TRANSACTION_TABLE = "transactions"
 
 assert SQLITE_URL
 assert CUSTOMER_ID
@@ -23,6 +25,7 @@ assert HUGH_ACCOUNT_ID
 assert PASSKEY_PATH
 assert UBANK_PASS
 assert isinstance(SQLITE_URL, str)
+
 
 con = sqlite3.connect(SQLITE_URL)
 cur = con.cursor()
@@ -32,7 +35,7 @@ with open(PASSKEY_PATH, "rb") as f:
 
 
 def get_plebs() -> dict[str, int]:
-    res = cur.execute("SELECT * FROM renter")
+    res = cur.execute("SELECT name, discord_id FROM renter")
     plebs = res.fetchall()
 
     pleb_info = {}
@@ -42,22 +45,15 @@ def get_plebs() -> dict[str, int]:
     return pleb_info
 
 
-def get_all_ubank_transactions() -> list[str]:
-    ids = cur.execute("SELECT transaction_id FROM transactions").fetchall()
-    ids = [x[0] for x in ids if x[0] != "" and x[0] != "backfilling data"]
-    return ids
-
-
-def get_all_transaction_ids() -> set[str]:
-    ids = cur.execute("SELECT transaction_id FROM rent_payments").fetchall()
-    # print(ids)
+def get_all_transaction_ids_from_table(table: str) -> set[str]:
+    ids = cur.execute(f"SELECT transaction_id FROM {table}").fetchall()
     ids = [x[0] for x in ids if x[0] != "" and x[0] != "backfilling data"]
     return set(ids)
 
 
 def store_pleb_transactions_in_db():
     pleb_info = get_plebs()
-    all_transaction_ids = get_all_transaction_ids()
+    all_transaction_ids = get_all_transaction_ids_from_table(RENT_TABLE)
     with Client(passkey) as client:
         transactions_to_insert = []
         now = int(time.time())
@@ -69,7 +65,7 @@ def store_pleb_transactions_in_db():
             if tran.id in all_transaction_ids:
                 continue
             if not tran.from_ or not tran.from_.legalName:
-                print("transaction had no legal name")
+                print(f"transaction had no legal name t={tran}")
                 continue
             if not tran.value:
                 print(f"no fucking transaction value? {tran}")
@@ -89,8 +85,8 @@ def store_pleb_transactions_in_db():
             )
 
         cur.executemany(
-            """
-        INSERT INTO rent_payments VALUES (
+            f"""
+        INSERT INTO {RENT_TABLE} VALUES (
             ?, ?, ?, ?
        );
         """,
@@ -108,7 +104,7 @@ def get_all_bank_accounts():
 
 
 def store_saving_and_spend_transactions():
-    all_transaction_ids = get_all_ubank_transactions()
+    all_transaction_ids = get_all_transaction_ids_from_table(TRANSACTION_TABLE)
     with Client(passkey) as client:
         transactions_to_insert = []
         transactions = client.search_account_transactions(
@@ -126,16 +122,18 @@ def store_saving_and_spend_transactions():
         for tran in transactions:
             if tran.id in all_transaction_ids:
                 continue
-            if not tran.from_ or not tran.from_.legalName:
-                print("transaction had no legal name")
-                continue
             if not tran.value:
-                print(f"no fucking transaction value? {tran}")
+                print(f"no fucking transaction value for id={tran.id}")
                 continue
             if not tran.posted:
+                print(f"transaction not posted for id={tran.id}")
                 continue
 
-            source = tran.from_.legalName
+            source = (
+                tran.from_.legalName
+                if tran.from_ and tran.from_.legalName
+                else "bonus interest"
+            )
 
             payment_in_cents = int(float(tran.value.amount) * 100)
 
@@ -144,10 +142,9 @@ def store_saving_and_spend_transactions():
             transactions_to_insert.append(
                 (tran.accountId, tran.id, payment_in_cents, source, tran_time)
             )
-        print(f"about to save transactions {transactions_to_insert}")
         cur.executemany(
-            """
-        INSERT INTO transactions VALUES (
+            f"""
+        INSERT INTO {TRANSACTION_TABLE} VALUES (
             ?, ?, ?, ?, ?
         );
         """,
@@ -157,12 +154,6 @@ def store_saving_and_spend_transactions():
 
 
 if __name__ == "__main__":
-    # store_saving_and_spend_transactions()
-
-    # get_all_bank_accounts()
-    ids = get_all_transaction_ids()
-    print(len(ids))
+    store_saving_and_spend_transactions()
 
     store_pleb_transactions_in_db()
-    ids = get_all_transaction_ids()
-    print(len(ids))
