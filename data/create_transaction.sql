@@ -3,5 +3,9 @@ CREATE TABLE transactions (
   transaction_id TEXT,
   amount INTEGER,
   source TEXT,
-  time INTEGER
+  time INTEGER,
+  vendor TEXT,
+  category TEXT,
+  location TEXT,
+  description TEXT
 );

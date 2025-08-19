@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -83,6 +84,14 @@ type Renter struct {
 	TimeLastPaid int64  `json:"unix_time_last_paid"`
 }
 
+type User struct {
+	Name         string `db:"name"`
+	Amount       int64  `db:"amount"`
+	DiscordID    int64  `db:"discord_id"`
+	ChannelID    int64  `db:"channel_id"`
+	TimeLastPaid int64  `db:"time"`
+}
+
 func (r *Renter) calculateRent(curTime int64) int64 {
 	rentInDays := float64(r.RentAmount) / float64(DAYS_IN_WEEK)
 	secondsSinceLastPay := curTime - r.TimeLastPaid
@@ -151,6 +160,41 @@ func saveRentToDB(ctx context.Context, uid, amt, curTime int64) error {
 	return nil
 }
 
+func getRentersFromDB(ctx context.Context) ([]*User, error) {
+	sqlStatement := `SELECT t.name, SUM(r.amount), t.discord_id, t.channel_id, r.time FROM rent_payments as r
+LEFT JOIN renter as t
+ON r.discord_id = t.discord_id
+GROUP BY r.discord_id;
+`
+
+	var renters []*User
+	rows, err := db.QueryContext(ctx, sqlStatement)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		us := &User{}
+		_ = rows.Scan(&us.Name, &us.Amount, &us.DiscordID, &us.ChannelID, &us.TimeLastPaid)
+
+		renters = append(renters, us)
+	}
+
+	return renters, nil
+}
+
+func getRenterPayments(ctx context.Context, uid uint64) (*User, error) {
+	users, err := getRentersFromDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, user := range users {
+		if user.DiscordID == int64(uid) {
+			return user, nil
+		}
+	}
+	return nil, errors.New("could not find user")
+}
+
 func (s *NoticeServer) readSendRent(ctx context.Context, fp string) error {
 	var renter Renter
 	f, err := os.ReadFile(fp)
@@ -163,19 +207,28 @@ func (s *NoticeServer) readSendRent(ctx context.Context, fp string) error {
 	}
 	slog.InfoContext(
 		ctx,
-		"read from file ",
+		"read from file renter ",
 		slog.String("renter", renter.Email),
 	)
 	curTime := time.Now().Unix()
 	amountToPay := renter.calculateRent(curTime)
-	err = postRent(&renter, amountToPay, s.Client)
-	if err != nil {
-		return err
-	}
 
 	err = saveRentToDB(ctx, int64(renter.UserId), amountToPay, curTime)
 	if err != nil {
 		return err
+	}
+
+	user, err := getRenterPayments(ctx, renter.UserId)
+	if err != nil {
+		return err
+	}
+
+	if user.Amount < -1000 {
+		// user has not paid within a margin of $10
+		err = postRent(&renter, amountToPay, s.Client)
+		if err != nil {
+			return err
+		}
 	}
 
 	oldTime := renter.TimeLastPaid
@@ -187,7 +240,7 @@ func (s *NoticeServer) readSendRent(ctx context.Context, fp string) error {
 
 	slog.InfoContext(
 		ctx,
-		"sent renter with amount",
+		"checked rent balance for ",
 		slog.String("renter", renter.Email),
 		slog.Int64("amount", amountToPay),
 		slog.String("time last paid", unixToStr(oldTime)),
@@ -217,28 +270,7 @@ func (s *NoticeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *RemindServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	sqlStatement := `SELECT t.name, SUM(r.amount), t.discord_id, t.channel_id, r.time FROM rent_payments as r
-LEFT JOIN renter as t
-ON r.discord_id = t.discord_id
-GROUP BY r.discord_id;
-`
-
-	type user struct {
-		Name         string `db:"name"`
-		Amount       int64  `db:"amount"`
-		DiscordID    int64  `db:"discord_id"`
-		ChannelID    int64  `db:"channel_id"`
-		TimeLastPaid int64  `db:"time"`
-	}
-
-	renters := make([]*user, 0)
-	rows, _ := db.QueryContext(r.Context(), sqlStatement)
-	for rows.Next() {
-		us := &user{}
-		_ = rows.Scan(&us.Name, &us.Amount, &us.DiscordID, &us.ChannelID, &us.TimeLastPaid)
-
-		renters = append(renters, us)
-	}
+	renters, _ := getRentersFromDB(r.Context())
 
 	now := time.Now().Unix()
 	message := `
