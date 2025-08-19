@@ -223,9 +223,11 @@ func (s *NoticeServer) readSendRent(ctx context.Context, fp string) error {
 		return err
 	}
 
-	if user.Amount < -1000 {
+	amountPreviousOwe := -1 * user.Amount / 100
+
+	if amountPreviousOwe > 10 {
 		// user has not paid within a margin of $10
-		err = postRent(&renter, amountToPay, s.Client)
+		err = postRent(&renter, amountToPay+amountPreviousOwe, s.Client)
 		if err != nil {
 			return err
 		}
