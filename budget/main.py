@@ -117,7 +117,6 @@ def store_pleb_transactions_in_db():
                 print(f"transaction had no legal name t={tran}")
                 continue
             if not tran.value:
-                print(f"no fucking transaction value? {tran}")
                 continue
 
             pleb_name = tran.from_.legalName
@@ -129,19 +128,13 @@ def store_pleb_transactions_in_db():
             payment_in_cents = int(float(tran.value.amount) * 100)
 
             transactions_to_insert.append((pleb_id, payment_in_cents, now, tran.id))
-            print(
-                f"about to save transaction {(pleb_id, payment_in_cents, now, tran.id)}"
-            )
 
         cur.executemany(
-            f"""
-        INSERT INTO {RENT_TABLE} VALUES (
-            ?, ?, ?, ?
-       );
-        """,
+            f""" INSERT INTO {RENT_TABLE} VALUES (?, ?, ?, ?);""",
             transactions_to_insert,
         )
         con.commit()
+        print(f"Saved {len(transactions_to_insert)} in db")
 
 
 def get_all_bank_accounts():
@@ -170,12 +163,9 @@ def store_saving_and_spend_transactions():
             ).transactions
         )
         for tran in transactions:
-            print(f"transaction={tran}")
-            print()
             if tran.id in all_transaction_ids:
                 continue
             if not tran.value:
-                print(f"no fucking transaction value for id={tran.id}")
                 continue
             if not tran.posted:
                 print(f"transaction not posted for id={tran.id}")
