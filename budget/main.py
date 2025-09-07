@@ -1,6 +1,7 @@
 from getpass import getpass
 import time
 
+from meatie import limit
 from ubank import Client, Passkey
 
 import sqlite3
@@ -14,8 +15,8 @@ class Transaction:
         self,
         account_id: str,
         transaction_id: str,
+        account_name: str,
         amount: int,
-        source: str,
         time: int,
         vendor: str,
         category: str,
@@ -24,8 +25,8 @@ class Transaction:
     ):
         self.account_id = account_id
         self.transaction_id = transaction_id
+        self.account_name = account_name
         self.amount = amount
-        self.source = source
         self.time = time
         self.vendor = vendor
         self.category = category
@@ -36,8 +37,8 @@ class Transaction:
         return (
             self.account_id,
             self.transaction_id,
+            self.account_name,
             self.amount,
-            self.source,
             self.time,
             self.vendor,
             self.category,
@@ -187,8 +188,8 @@ def store_saving_and_spend_transactions():
                 transaction = Transaction(
                     tran.accountId,
                     tran.id,
-                    payment_in_cents,
                     source,
+                    payment_in_cents,
                     tran_time,
                     tran_vendor,
                     "",
@@ -199,8 +200,8 @@ def store_saving_and_spend_transactions():
                 transaction = Transaction(
                     tran.accountId,
                     tran.id,
-                    payment_in_cents,
                     source,
+                    payment_in_cents,
                     tran_time,
                     "",
                     "Debit",

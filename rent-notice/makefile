@@ -1,6 +1,6 @@
-.PHONY: run
+.PHONY: run-go
 
-include .env
+include ../.env
 export
 
 run-go:

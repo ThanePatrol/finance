@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -31,11 +32,12 @@ const (
 )
 
 type Config struct {
-	Account string
-	Bsb     string
-	UserId  string
-	Port    string
-	DBUrl   string
+	Account   string
+	Bsb       string
+	UserId    string
+	Port      string
+	DBUrl     string
+	BotspamId int64
 }
 
 var (
@@ -74,6 +76,16 @@ func init() {
 	}
 	url = strings.ReplaceAll(url, `"`, "")
 	conf.DBUrl = url
+
+	botspam, ok := os.LookupEnv("BOTSPAM_ID")
+	if !ok {
+		panic("could not read botspam url from env")
+	}
+	botspamId, err := strconv.ParseInt(botspam, 10, 64)
+	if err != nil {
+		panic(err.Error())
+	}
+	conf.BotspamId = botspamId
 }
 
 type Renter struct {
@@ -195,6 +207,11 @@ func getRenterPayments(ctx context.Context, uid uint64) (*User, error) {
 	return nil, errors.New("could not find user")
 }
 
+func (s *NoticeServer) logDis(ctx context.Context, msg string, args ...any) {
+	slog.InfoContext(ctx, msg, args)
+	sendMessageWithRetry(s.Client, conf.BotspamId, fmt.Sprintf("%s %v", msg, args))
+}
+
 func (s *NoticeServer) readSendRent(ctx context.Context, fp string) error {
 	var renter Renter
 	f, err := os.ReadFile(fp)
@@ -205,7 +222,7 @@ func (s *NoticeServer) readSendRent(ctx context.Context, fp string) error {
 	if err != nil {
 		return err
 	}
-	slog.InfoContext(
+	s.logDis(
 		ctx,
 		"read from file renter ",
 		slog.String("renter", renter.Email),
@@ -213,24 +230,21 @@ func (s *NoticeServer) readSendRent(ctx context.Context, fp string) error {
 	curTime := time.Now().Unix()
 	amountToPay := renter.calculateRent(curTime)
 
-	err = saveRentToDB(ctx, int64(renter.UserId), amountToPay, curTime)
+	user, err := getRenterPayments(ctx, renter.UserId)
 	if err != nil {
 		return err
 	}
 
-	user, err := getRenterPayments(ctx, renter.UserId)
+	err = saveRentToDB(ctx, int64(renter.UserId), amountToPay, curTime)
 	if err != nil {
 		return err
 	}
 
 	amountPreviousOwe := -1 * user.Amount / 100
 
-	if amountPreviousOwe > 10 {
-		// user has not paid within a margin of $10
-		err = postRent(&renter, amountToPay+amountPreviousOwe, s.Client)
-		if err != nil {
-			return err
-		}
+	err = postRent(&renter, amountToPay, s.Client)
+	if err != nil {
+		return err
 	}
 
 	oldTime := renter.TimeLastPaid
@@ -240,14 +254,14 @@ func (s *NoticeServer) readSendRent(ctx context.Context, fp string) error {
 		return err
 	}
 
-	slog.InfoContext(
-		ctx,
-		"checked rent balance for ",
+	s.logDis(ctx, "checked rent balance for ",
 		slog.String("renter", renter.Email),
-		slog.Int64("amount", amountToPay),
+		slog.Int64("amount calculated", amountToPay),
+		slog.Int64("amount owed", amountPreviousOwe),
+		slog.Int64("amount sent", amountToPay+amountPreviousOwe),
 		slog.String("time last paid", unixToStr(oldTime)),
-		slog.String("time paid", unixToStr(renter.TimeLastPaid)),
-	)
+		slog.String("time paid", unixToStr(renter.TimeLastPaid)))
+
 	err = os.WriteFile(fp, renterBytes, os.ModePerm)
 	if err != nil {
 		return err
@@ -295,16 +309,24 @@ func (s *RemindServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m := strings.Replace(message, "_USER", fmt.Sprintf("%d", renter.DiscordID), 1)
 		m = strings.Replace(m, "_OWING", fmt.Sprintf("%d", rentInDollar), 1)
 		m = strings.Replace(m, "_DADDY", conf.UserId, 1)
-		var err error
-		for range 3 {
-			_, err = s.Client.Rest().
-				CreateMessage(snowflake.ID(renter.ChannelID), discord.NewMessageCreateBuilder().SetContent(m).Build())
-			if err == nil {
-				break
-			}
-			time.Sleep(time.Second)
+		err := sendMessageWithRetry(s.Client, renter.ChannelID, m)
+		if err != nil {
+			w.WriteHeader(500)
 		}
 	}
+}
+
+func sendMessageWithRetry(c bot.Client, channelID int64, content string) error {
+	var err error
+	for range 3 {
+		_, err = c.Rest().
+			CreateMessage(snowflake.ID(channelID), discord.NewMessageCreateBuilder().SetContent(content).Build())
+		if err == nil {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	return err
 }
 
 func setupHTTPServer(client bot.Client) {
