@@ -33,7 +33,10 @@ type Transaction struct {
 	Description   string
 }
 
-const SECONDS_IN_WEEK = 60 * 60 * 24 * 7
+const (
+	SECONDS_IN_DAY  = int64(60 * 60 * 24)
+	SECONDS_IN_WEEK = SECONDS_IN_DAY * 7
+)
 
 var (
 	db   *sql.DB
@@ -54,6 +57,7 @@ func init() {
 	if !ok {
 		panic("could not read db url from env")
 	}
+	fmt.Println(url)
 	url = strings.ReplaceAll(url, `"`, "")
 
 	save, ok := os.LookupEnv("SHARED_SAVE_ACCOUNT_ID")
@@ -71,8 +75,7 @@ func init() {
 	var err error
 	db, err = sql.Open("sqlite3", url)
 	if err != nil {
-		slog.Error("error while opening db", slog.Any("err", err))
-		return
+		panic(fmt.Sprintf("error while opening db: %v", err))
 	}
 }
 
@@ -103,22 +106,31 @@ func getTransFromDB() ([]*Transaction, error) {
 		transactions = append(transactions, t)
 	}
 
+	fmt.Printf("trans: %+v", transactions[0])
+
 	return transactions, nil
 }
 
 // TODO Aggregate items by week
 func generateLineItems(accountID string, transactions []*Transaction) ([]opts.LineData, []int64) {
-	items := make([]opts.LineData, 0)
-	times := make([]int64, 0)
-	first := transactions[0].Time
+	var items []opts.LineData
+	var times []int64
+	if len(transactions) == 0 {
+		return items, times
+	}
+	firstTime := transactions[0].Time
 	for _, t := range transactions {
 		if t.AccountID != accountID {
 			continue
 		}
 		items = append(items, opts.LineData{Value: t.Amount / 100})
-		times = append(times, (t.Time-first)/SECONDS_IN_WEEK)
+		times = append(times, getDaysBetween(firstTime, t.Time))
 	}
 	return items, times
+}
+
+func getDaysBetween(first, other int64) int64 {
+	return (other - first) / SECONDS_IN_DAY
 }
 
 func generateCumLineItems(accountID string, transactions []*Transaction) ([]opts.LineData, []int64) {
@@ -140,11 +152,12 @@ func generateCumLineItems(accountID string, transactions []*Transaction) ([]opts
 func httpserver(w http.ResponseWriter, _ *http.Request) {
 	transactions, err := getTransFromDB()
 	if err != nil {
+		fmt.Fprintf(w, "err: %v", err)
 		w.WriteHeader(500)
 		return
 	}
 	lineSpend := charts.NewLine()
-	lineSave := charts.NewLine()
+	// lineSave := charts.NewLine()
 
 	// line.SetGlobalOptions(
 	// 	charts.WithInitializationOpts(opts.Initialization{Theme: types.ThemeWesteros}),
@@ -154,15 +167,16 @@ func httpserver(w http.ResponseWriter, _ *http.Request) {
 	// 	}))
 
 	items, times := generateLineItems(conf.SpendAcc, transactions)
+	fmt.Printf("times: %v items: %v id: %s", times, items, conf.SpendAcc)
 	lineSpend.SetXAxis(times).
 		AddSeries("Category A", items)
 		// SetSeriesOptions(charts.WithLineChartOpts(opts.LineChart{Smooth: opts.Bool(true)}))
 	lineSpend.Render(w)
 
-	items, times = generateCumLineItems(conf.SaveAcc, transactions)
-	lineSave.SetXAxis(times).
-		AddSeries("Category A", items)
-	lineSave.Render(w)
+	// items, times = generateCumLineItems(conf.SaveAcc, transactions)
+	// lineSave.SetXAxis(times).
+	// 	AddSeries("Category A", items)
+	// lineSave.Render(w)
 }
 
 func main() {
