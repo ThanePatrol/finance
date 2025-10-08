@@ -7,10 +7,10 @@ from ubank import Client, Passkey
 import sqlite3
 import os
 from dotenv import load_dotenv
-import subprocess
+import agent
 
 
-class Transaction:
+class Transaction():
     def __init__(
         self,
         account_id: str,
@@ -211,7 +211,9 @@ def store_saving_and_spend_transactions():
 
             transactions_to_insert.append(transaction)
 
-    # TODO - actually do categorize_transactions(vendors, transactions_to_insert)
+    # TODO
+    categorize_transactions(vendors, transactions_to_insert)
+
     cur.executemany(
         f"""
         INSERT INTO {TRANSACTION_TABLE} VALUES (
@@ -222,31 +224,44 @@ def store_saving_and_spend_transactions():
     )
     con.commit()
 
-
 def categorize_transactions(
     vendors: dict[str, str], transactions: list[Transaction]
 ) -> None:
-    prompt = 'Given the vendor, location and description of this Transaction, output ONE of the following categories: Groceries, Eating out, Car, Rent and bills, Fitness/health. Do not output anything except the exact Category string. For example, given the input "vendor=Quarrymans Hotel, location=Pyrmont, description=Quarrymans Hotel Bass Hill AU", output only the string "Eating out". If unsure, use Google search to find more information. If still unsure, categorise as: Other.'
+    
+    def _enforce_input_schema(
+            t: Transaction
+    ) -> agent.TransactionInput:
+        return agent.TransactionInput(
+            account_id=t.account_id,
+            transaction_id=t.transaction_id,
+            amount=t.amount,
+            source=t.source,
+            time=t.time,
+            vendor=t.vendor,
+            location=t.location,
+            description=t.description,
+        )
 
+    transactions_to_categorize: list[agent.TransactionInput] = []
     for t in transactions:
-        if not t.category:
-            if t.vendor in vendors:
-                t.category = vendors[t.vendor]
-            else:
-                print(f"proompt={t.vendor}, {t.location}, {t.description}")
-                proompt = (
-                    prompt
-                    + f"\nYour input: vendor={t.vendor}, location={t.location}, description={t.description}."
-                )
-                output = subprocess.run(
-                    ["gemini", f"--prompt={proompt}"], capture_output=True
-                )
-                t.category = str(output.stdout).strip()
-                print(f"gemini did the thing output={t.category}")
-                vendors[t.vendor] = t.category
+        if t.category:
+            continue
+        if t.vendor in vendors:
+            t.category = vendors[t.vendor]
+            continue
+        
+        transactions_to_categorize.append(
+            _enforce_input_schema(t)
+        ) # Agent requires Pydantic base model as input
 
+    if transactions_to_categorize:
+        agent_output = agent.categorize_transactions(transactions_to_categorize)
+        if agent_output:
+            category = {e["transaction_id"]: e["category"] for e in agent_output}
+            for t in transactions:
+                if not t.category:
+                    t.category = category[t.transaction_id]
 
 if __name__ == "__main__":
     store_saving_and_spend_transactions()
-
     store_pleb_transactions_in_db()
