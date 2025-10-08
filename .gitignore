@@ -7,3 +7,4 @@ data/finance.db
 main
 *.csv
 *.xlsx
+.env
