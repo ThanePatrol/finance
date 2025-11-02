@@ -14,6 +14,7 @@ from google.genai import types
 
 load_dotenv(".env")
 
+
 class Category(str, Enum):
     GROCERIES = "Groceries"
     EATING_OUT = "Eating out"
@@ -22,18 +23,20 @@ class Category(str, Enum):
     RENT_BILLS = "Rent and bills"
     FITNESS_HEALTH = "Fitness or health"
 
+
 class TransactionInput(BaseModel):
     account_id: Optional[str]
     transaction_id: Optional[str]
     amount: Optional[int]
-    source: Optional[str]
     time: Optional[int]
     vendor: Optional[str]
     location: Optional[str]
     description: Optional[str]
 
+
 class TransactionListInput(BaseModel):
     transactions: list[TransactionInput]
+
 
 PROMPT = f"""
 You are a personal banking assistant that categorizes financial transactions.
@@ -64,28 +67,23 @@ agent = Agent(
     # output_schema=CategorizedTransactionList
 )
 
+
 def extract_json_from_md(text: str) -> str:
     l_brace, r_brace = text.find("{"), text.rfind("}")
     return text[l_brace : r_brace + 1] if r_brace > l_brace > -1 else text
+
 
 async def run_categorization_agent(input: TransactionListInput) -> list[dict]:
     app_name, user_id, session_id = "categorization_service", "user", "session"
     session_service = InMemorySessionService()
     await session_service.create_session(
-        app_name=app_name,
-        user_id=user_id,
-        session_id=session_id
+        app_name=app_name, user_id=user_id, session_id=session_id
     )
-    runner = Runner(
-        agent=agent,
-        app_name=app_name,
-        session_service=session_service
-    )
-    
+    runner = Runner(agent=agent, app_name=app_name, session_service=session_service)
+
     # Send user message as JSON to the agent
     user_message = types.Content(
-        role="user",
-        parts=[types.Part(text=input.model_dump_json())]
+        role="user", parts=[types.Part(text=input.model_dump_json())]
     )
     print(f"Sending message to agent: {user_message}")
 
@@ -109,6 +107,7 @@ async def run_categorization_agent(input: TransactionListInput) -> list[dict]:
         print("No response from agent")
     return []
 
+
 def categorize_transactions(transactions: list[TransactionInput]):
     print("Starting categorization service...")
     result = asyncio.run(
@@ -117,24 +116,43 @@ def categorize_transactions(transactions: list[TransactionInput]):
     print(json.dumps(result, indent=2))
     return result
 
+
 if __name__ == "__main__":
     dummy_data = [
         {
-            "account_id": "acc-001", "transaction_id": "txn-001", "amount": 1500,
-            "source": "visa-4567", "time": 1698778800, "vendor": "Woolworths",
-            "category": "", "location": "Sydney", "description": "Woolworths Metro"
+            "account_id": "acc-001",
+            "transaction_id": "txn-001",
+            "amount": 1500,
+            "source": "visa-4567",
+            "time": 1698778800,
+            "vendor": "Woolworths",
+            "category": "",
+            "location": "Sydney",
+            "description": "Woolworths Metro",
         },
         {
-            "account_id": "acc-002", "transaction_id": "txn-002", "amount": 7500,
-            "source": "mastercard-1234", "time": 1698779000, "vendor": "Qantas",
-            "category": "", "location": "Sydney Airport", "description": "Flight to Melbourne"
+            "account_id": "acc-002",
+            "transaction_id": "txn-002",
+            "amount": 7500,
+            "source": "mastercard-1234",
+            "time": 1698779000,
+            "vendor": "Qantas",
+            "category": "",
+            "location": "Sydney Airport",
+            "description": "Flight to Melbourne",
         },
         {
-            "account_id": "acc-003", "transaction_id": "txn-003", "amount": 4500,
-            "source": "debit-9876", "time": 1698780000, "vendor": "Little India",
-            "category": "", "location": "Ryde, Sydney", "description": "Supermarket"
-        }
+            "account_id": "acc-003",
+            "transaction_id": "txn-003",
+            "amount": 4500,
+            "source": "debit-9876",
+            "time": 1698780000,
+            "vendor": "Little India",
+            "category": "",
+            "location": "Ryde, Sydney",
+            "description": "Supermarket",
+        },
     ]
-    
+
     load_dotenv()
     categorize_transactions([TransactionInput(**t) for t in dummy_data])

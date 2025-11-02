@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 import agent
 
 
-class Transaction():
+class Transaction:
     def __init__(
         self,
         account_id: str,
@@ -161,6 +161,7 @@ def store_saving_and_spend_transactions():
                 account_id=SHARED_SPEND_ACCOUNT_ID,
                 bank_id=BANK_ID,
                 customerId=CUSTOMER_ID,
+                limit=5,
             ).transactions
         )
         for tran in transactions:
@@ -224,13 +225,12 @@ def store_saving_and_spend_transactions():
     )
     con.commit()
 
+
 def categorize_transactions(
     vendors: dict[str, str], transactions: list[Transaction]
 ) -> None:
-    
-    def _enforce_input_schema(
-            t: Transaction
-    ) -> agent.TransactionInput:
+
+    def _enforce_input_schema(t: Transaction) -> agent.TransactionInput:
         return agent.TransactionInput(
             account_id=t.account_id,
             transaction_id=t.transaction_id,
@@ -249,10 +249,10 @@ def categorize_transactions(
         if t.vendor in vendors:
             t.category = vendors[t.vendor]
             continue
-        
+
         transactions_to_categorize.append(
             _enforce_input_schema(t)
-        ) # Agent requires Pydantic base model as input
+        )  # Agent requires Pydantic base model as input
 
     if transactions_to_categorize:
         agent_output = agent.categorize_transactions(transactions_to_categorize)
@@ -261,6 +261,7 @@ def categorize_transactions(
             for t in transactions:
                 if not t.category:
                     t.category = category[t.transaction_id]
+
 
 if __name__ == "__main__":
     store_saving_and_spend_transactions()
