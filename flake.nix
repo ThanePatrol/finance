@@ -4,7 +4,8 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/master";
     flake-utils.url = "github:numtide/flake-utils";
-    naersk.url = "github:nix-community/naersk";
+    rust-overlay.url = "github:oxalica/rust-overlay";
+
   };
 
   outputs =
@@ -12,15 +13,17 @@
       self,
       nixpkgs,
       flake-utils,
-      naersk,
+      rust-overlay,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
+        overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs {
-          inherit system;
+          inherit system overlays;
         };
-        #naersk' = pkgs.callPackage naersk { };
+
+        rustToolchain = pkgs.pkgsBuildHost.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
 
         pyPkgs = with pkgs.python312Packages; [
           plotly
@@ -28,12 +31,16 @@
           openpyxl
           pip
         ];
+        nativeBuildInputs = with pkgs; [
+          rustToolchain
+          pkg-config
+        ];
 
       in
       with pkgs;
       {
-        defaultPackage = naersk-lib.buildPackage ./property;
         devShells.default = mkShell {
+          inherit nativeBuildInputs;
           buildInputs = [
             python312
             uv
@@ -52,12 +59,12 @@
           ]
           ++ pyPkgs;
 
-          RUST_SRC_PATH = rustPlatform.rustLibSrc;
+          RUST_SRC_PATH = "${pkgs.latest.rustChannels.stable.rust-src}/lib/rustlib/src/rust/library";
 
           shellHook = ''
             echo "sourcing venv"
             source .venv/bin/activate
-            export $(cat .env)
+            set -o allexport && source .env && set +o allexport
             echo "sourced venv"
           '';
 

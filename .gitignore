@@ -9,3 +9,4 @@ main
 *.xlsx
 .env
 __pycache__
+property/property
