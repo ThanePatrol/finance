@@ -273,7 +273,10 @@ def get_parser_for_datasource(source: DataSource) -> BaseTransactionParser:
     except KeyError:
         raise ValueError(f"No parser implemented for unknown datasource={source}")
 
+# TODO Define time interval for transactions and query DB for rows in that interval
 def insert_bulk_transactions(transactions: list[Transaction]) -> None:
+    # cur.execute(f"SELECT * FROM {TRANSACTION_TABLE} WHERE ")
+    # rows = cur.fetchall()
     cur.executemany(
         f"""
         INSERT INTO {TRANSACTION_TABLE} VALUES (
@@ -284,49 +287,78 @@ def insert_bulk_transactions(transactions: list[Transaction]) -> None:
     )
     con.commit()
 
-if __name__ == "__main__":
+def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Read CSVs containing historical transactions"
     )
 
-    parser.add_argument(
+    file_or_directory_group = parser.add_mutually_exclusive_group(required=True)
+    file_or_directory_group.add_argument(
         "-f",
         "--file",
-        help="File paths to read",
-        required=True
+        help="file paths to read"
     )
+    file_or_directory_group.add_argument(
+        "-d",
+        "--directory",
+        help=f"directory containing subdirectories named like: {[e.value for e in DataSource]}"
+    )
+
     parser.add_argument(
         "-s",
         "--src",
         type=DataSource,
         choices=list(DataSource),
-        help="Type of transaction data source",
-        required=True
+        help="type of transaction data source (required if using -f)"
     )
     parser.add_argument(
         "-u",
         "--user",
         type=str,
         choices=VALID_USERS,
-        help="User to record on db save (hint: set comma-delimited USERS in .env)"
+        help="user to record on db save (hint: set comma-delimited USERS in .env)"
     )
     parser.add_argument(
         "-n",
         "--dry-run",
-        action="store_true"
+        action="store_true",
+        help="set if you do not want to insert to db, just print"
     )
+    return parser.parse_args()
 
-    args = parser.parse_args()
-
-    # Validation
-    if args.user is None:
-        if args.src == DataSource.NP_CSV:
-            print("No user provided, defaulting to 'shared' for datasource=npbs")
-        else:
-            parser.error("--user must be provided unless --src=npbs")
+if __name__ == "__main__":
+    args = get_args()
 
     # Parse csv
-    transactions_to_insert = get_parser_for_datasource(args.src).process_transactions(file_path=args.file, user=args.user)
+    transactions_to_insert = []
+
+    # TODO Default user
+    if args.directory:
+        for source in DataSource:
+            dir_path = os.path.join(args.directory, source.value)
+            if os.path.isdir(dir_path):
+                if args.user is None:
+                    if source == DataSource.NP_CSV:
+                        print("No user provided, defaulting to 'shared' for datasource=npbs")
+                    else:
+                        print(f"Skipping directory '{source.value}': --user must be provided unless --src=npbs")
+                        continue
+                
+                for filename in os.listdir(dir_path):
+                    if filename.lower().endswith(".csv"):
+                        filepath = os.path.join(dir_path, filename)
+                        transactions_to_insert.extend(
+                            get_parser_for_datasource(source).process_transactions(filepath, args.user)
+                        )
+    else:
+        # Validation
+        if args.user is None:
+            if args.src == DataSource.NP_CSV:
+                print("No user provided, defaulting to 'shared' for datasource=npbs")
+            else:
+                print("--user must be provided unless --src=npbs")
+                exit(1)
+        transactions_to_insert = get_parser_for_datasource(args.src).process_transactions(file_path=args.file, user=args.user)
 
     # Persist to db
     if args.dry_run:
@@ -338,5 +370,8 @@ if __name__ == "__main__":
     
         con = sqlite3.connect(SQLITE_URL)
         cur = con.cursor()
-    
-        insert_bulk_transactions(transactions_to_insert)
+        try:
+            insert_bulk_transactions(transactions_to_insert)
+        finally:
+            cur.close()
+            con.close()
