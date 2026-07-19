@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from enum import Enum
 import os
 import sqlite3
+from hashlib import sha512
 
 
 load_dotenv(".env")
@@ -43,6 +44,13 @@ class Transaction:
         self.balance = balance
         self.user = user
         self.original_record = original_record
+        self.hash = sha512(
+            "|".join(
+                str(field) if field else "!empty!" for field in [
+                self.account_id, self.transaction_id, self.account_name,
+                self.amount, self.time, self.vendor, self.category,
+                self.location, self.description, self.balance, self.user]
+            ).encode("utf-8")).hexdigest()
 
     def to_tuple(self):
         return (
@@ -57,7 +65,8 @@ class Transaction:
             self.description,
             self.balance,
             self.user,
-            self.original_record
+            self.original_record,
+            self.hash
         )
 
     def __str__(self):
@@ -273,17 +282,37 @@ def get_parser_for_datasource(source: DataSource) -> BaseTransactionParser:
     except KeyError:
         raise ValueError(f"No parser implemented for unknown datasource={source}")
 
-# TODO Define time interval for transactions and query DB for rows in that interval
 def insert_bulk_transactions(transactions: list[Transaction]) -> None:
-    # cur.execute(f"SELECT * FROM {TRANSACTION_TABLE} WHERE ")
-    # rows = cur.fetchall()
+    if not transactions:
+        return
+
+    # Define time interval which transactions span
+    min_time = min(transactions, key=lambda t: t.time).time
+    max_time = max(transactions, key=lambda t: t.time).time
+    
+    # Define existing transactions in table, for which this run should not add duplicates
+    cur.execute(
+        f"SELECT hash FROM {TRANSACTION_TABLE} WHERE time >= ? AND time <= ?",
+        (min_time, max_time)
+    )
+    rows = cur.fetchall()
+    # Actual value is first in tuple
+    hashes_to_not_duplicate = set([r[0] for r in rows])
+    transactions_to_insert = [t.to_tuple() for t in transactions if t.hash not in hashes_to_not_duplicate]
+
+    if (transactions_count := len(transactions_to_insert)) > 0:
+        print(f"About to insert {transactions_count} unique records out of {len(transactions)} total records...")
+    else:
+        print("No new transactions to insert.")
+        return
+
     cur.executemany(
         f"""
         INSERT INTO {TRANSACTION_TABLE} VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         );
         """,
-        [t.to_tuple() for t in transactions],
+        transactions_to_insert
     )
     con.commit()
 
