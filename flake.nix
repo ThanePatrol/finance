@@ -25,12 +25,18 @@
 
         rustToolchain = pkgs.pkgsBuildHost.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
 
-        pyPkgs = with pkgs.python312Packages; [
-          plotly
-          pandas
-          openpyxl
-          pip
-        ];
+        pythonEnv = pkgs.python313.withPackages (
+          ps: with ps; [
+            pip
+            pyautogui
+            tkinter
+          ]
+        );
+        # pyPkgs = with pkgs.python313Packages.withPackages; [
+        #   pip
+        #   pyautogui
+        #   tkinter
+        # ];
         nativeBuildInputs = with pkgs; [
           rustToolchain
           pkg-config
@@ -42,28 +48,32 @@
         devShells.default = mkShell {
           inherit nativeBuildInputs;
           buildInputs = [
-            python312
+            pythonEnv
             uv
             sqlite
             cargo
-            rustc
-            rustfmt
             pre-commit
-            rustPackages.clippy
+
+            xvfb-run
+            scrot
+            xorg.xorgserver # provides the Xvfb binary itself
+            x11vnc # For debugging.
 
             openssl
             pkg-config
             libsodium
             zlib
             binutils
-          ]
-          ++ pyPkgs;
+          ];
+          packages = [ pythonEnv ];
+          # ++ pyPkgs;
 
-          RUST_SRC_PATH = "${pkgs.latest.rustChannels.stable.rust-src}/lib/rustlib/src/rust/library";
+          RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
+          # RUST_SRC_PATH = "${pkgs.latest.rustChannels.stable.rust-src}/lib/rustlib/src/rust/library";
 
           shellHook = ''
             echo "sourcing venv"
-            source .venv/bin/activate
+            #source .venv/bin/activate
             set -o allexport && source .env && set +o allexport
             echo "sourced venv"
           '';

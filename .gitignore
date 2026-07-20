@@ -6,6 +6,8 @@ data/insert_pleb.sql
 data/finance.db
 main
 *.csv
+*.png
+*.jpg
 *.xlsx
 .env
 __pycache__
