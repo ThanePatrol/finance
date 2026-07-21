@@ -30,6 +30,7 @@
             pip
             pyautogui
             tkinter
+            opencv-python
           ]
         );
         # pyPkgs = with pkgs.python313Packages.withPackages; [

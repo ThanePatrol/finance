@@ -2,6 +2,8 @@ import os
 
 import pyautogui
 
+print(f"cwd: {os.getcwd()} and img: {os.path.isfile('download.png')}")
+
 username = os.environ["HSBC_USERNAME"]
 password = os.environ["HSBC_PASSWORD"]
 
@@ -48,11 +50,59 @@ pyautogui.click()
 pyautogui.write(password, interval=0.25)
 pyautogui.sleep(0.25)
 pyautogui.press("enter")
+pyautogui.sleep(7)
+
+# We are now logged in.
+
+# Navigate to credit card account
+pyautogui.moveTo(652, 414, duration=1)
+pyautogui.click()
+# Hack... measured by me pressing keypresses 😭
+for _ in range(15):
+    pyautogui.press("down")
+    pyautogui.sleep(0.25)
+pyautogui.moveTo(599, 560, duration=1)
+pyautogui.click()
 
 
-# Type with quarter-second pause in between each key.
-# pyautogui.press('esc') # Simulate pressing the Escape key.
-# pyautogui.keyDown('shift')
-# pyautogui.write(['left', 'left', 'left', 'left', 'left', 'left'])
-# pyautogui.keyUp('shift')
-# pyautogui.hotkey('ctrl', 'c')
+# Click on search icon
+pyautogui.moveTo(1248, 405, duration=1)
+pyautogui.click()
+pyautogui.sleep(0.5)
+print("clicked on search icon")
+
+# Click last 30 days of history
+pyautogui.moveTo(1010, 523, duration=1)
+pyautogui.click()
+pyautogui.sleep(0.5)
+print("clicked on last 30 days")
+
+# Click "View results"
+pyautogui.moveTo(1010, 723, duration=1)
+pyautogui.click()
+pyautogui.sleep(1)
+print("clicked on view results")
+
+# Hack to scroll down until we can see the download button...
+download_location = None
+while not download_location:
+    pyautogui.press("down")
+    pyautogui.sleep(0.25)
+    download_location = pyautogui.locateCenterOnScreen(
+        "download.png", grayscale=True, confidence=0.8
+    )
+    print(
+        f"could not find download button, scolling down download: {download_location}"
+    )
+
+assert download_location
+
+print(f"found download button: {download_location}")
+pyautogui.moveTo(download_location.x, download_location.y, duration=2)
+pyautogui.click()
+pyautogui.sleep(2)
+
+
+pyautogui.moveTo(859, 696, duration=1)
+pyautogui.doubleClick()
+print("downloading")
