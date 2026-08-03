@@ -60,6 +60,8 @@
             xorg.xorgserver # provides the Xvfb binary itself
             x11vnc # For debugging.
 
+            gnumake
+
             openssl
             pkg-config
             libsodium
@@ -79,6 +81,41 @@
             echo "sourced venv"
           '';
 
+        };
+
+        # This vibecoded thing doesn't actually work but does a bunch of packaging. 
+        # TODO: Fix or delete.
+        packages = {
+          default = self.packages.${system}.hsbc-download;
+
+          hsbc-download = pkgs.writeShellApplication {
+            name = "hsbc-download";
+            runtimeInputs = [
+              pythonEnv
+              pkgs.xvfb-run
+              pkgs.xorg.xorgserver
+              pkgs.scrot
+              pkgs.xdotool
+              pkgs.firefox
+            ];
+            text = ''
+              pkill firefox || true
+
+              export DOWNLOAD_PNG_PATH="${./download.png}"
+              touch "$HOME/.Xauthority" || true
+              2>/dev/null 1>&2 Xvfb :99 -screen 0 1920x1080x24 &
+              sleep 1
+              2>/dev/null 1>&2 x11vnc -display :99 -localhost -forever -passwd mysecret &
+              sleep 1
+              export DISPLAY=:99; 2>/dev/null 1>&2 firefox -P default --width 1800 --height 900 "https://www.hsbc.com.au" &
+
+              sleep 10
+              export DISPLAY=:99; python3 ${./bank-statements}/hsbc.py 
+              rm ~/.Xauthority || true
+
+              pkill firefox || true
+            '';
+          };
         };
       }
     );

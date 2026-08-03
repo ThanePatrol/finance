@@ -8,6 +8,7 @@ help: ## Display this screen
 	@echo "Targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s \033[0m %s\n", $$1, $$2}'
 
+# Have to ssh with `ssh -L 5900:localhost:5900 zerul` to start the session.
 start-vnc-debug: ## Starts a VNC session for debugging.
 	- touch ~/.Xauthority
 	2>/dev/null 1>&2 Xvfb :99 -screen 0 1920x1080x24 &
@@ -31,3 +32,8 @@ hsbc-download: ## Runs pyautogui clicker for HSBC downloads
 show-mouse: ## View current mouse coordinates
 	export DISPLAY=:99; python3 -c "import pyautogui; pyautogui.displayMousePosition()" 
 
+# Additional kill helps with permission denied errors from pyautogui 🤷
+start-with-sleep: kill-vnc-debug fresh-vnc-debug
+	sleep 10
+
+full-download: start-with-sleep hsbc-download kill-vnc-debug

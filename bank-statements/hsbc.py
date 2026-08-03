@@ -2,14 +2,14 @@ import os
 
 import pyautogui
 
-print(f"cwd: {os.getcwd()} and img: {os.path.isfile('download.png')}")
-
 username = os.environ["HSBC_USERNAME"]
 password = os.environ["HSBC_PASSWORD"]
+file = os.environ["DOWNLOAD_PNG_PATH"]
 
 assert username
 assert password
-if username == "" or password == "":
+assert file
+if username == "" or password == "" or file == "" or not os.path.isfile(file):
     assert True
 
 # out = pyautogui.screenshot("main_page.png")
@@ -85,15 +85,17 @@ print("clicked on view results")
 
 # Hack to scroll down until we can see the download button...
 download_location = None
-while not download_location:
+i = 0
+while not download_location and i < 100:
     pyautogui.press("down")
     pyautogui.sleep(0.25)
     download_location = pyautogui.locateCenterOnScreen(
-        "download.png", grayscale=True, confidence=0.8
+        file, grayscale=True, confidence=0.8
     )
     print(
         f"could not find download button, scolling down download: {download_location}"
     )
+    i += 1
 
 assert download_location
 
