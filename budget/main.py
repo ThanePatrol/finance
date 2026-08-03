@@ -1,13 +1,19 @@
-from getpass import getpass
-import time
-
-from meatie import limit
-from ubank import Client, Passkey
-
-import sqlite3
-import os
+from abc import ABC, abstractmethod
+import argparse
+import csv
+from datetime import datetime
+from typing import Optional
 from dotenv import load_dotenv
-import agent
+from enum import Enum
+import os
+import sqlite3
+from hashlib import sha512
+
+
+load_dotenv(".env")
+TRANSACTION_TABLE = "transactions"
+VALID_USERS = [u.strip() for u in os.environ.get("USERS", "shared").split(",") if u.strip()]
+SQLITE_URL = os.environ.get("SQLITE_URL")
 
 
 class Transaction:
@@ -22,6 +28,9 @@ class Transaction:
         category: str,
         location: str,
         description: str,
+        balance: str,
+        user: str,
+        original_record: str
     ):
         self.account_id = account_id
         self.transaction_id = transaction_id
@@ -32,6 +41,16 @@ class Transaction:
         self.category = category
         self.location = location
         self.description = description
+        self.balance = balance
+        self.user = user
+        self.original_record = original_record
+        self.hash = sha512(
+            "|".join(
+                str(field) if field else "!empty!" for field in [
+                self.account_id, self.transaction_id, self.account_name,
+                self.amount, self.time, self.vendor, self.category,
+                self.location, self.description, self.balance, self.user]
+            ).encode("utf-8")).hexdigest()
 
     def to_tuple(self):
         return (
@@ -44,225 +63,344 @@ class Transaction:
             self.category,
             self.location,
             self.description,
+            self.balance,
+            self.user,
+            self.original_record,
+            self.hash
         )
 
+    def __str__(self):
+        return ", ".join(f"{key}={value}" for key, value in self.__dict__.items())
 
-load_dotenv(".env")
-HUGH_ACCOUNT_ID = os.environ.get("HUGH_ACCOUNT_ID")
-BANK_ID = "1"
-CUSTOMER_ID = os.environ.get("CUSTOMER_ID")
-SQLITE_URL = os.environ.get("SQLITE_URL")
-PASSKEY_PATH = os.environ.get("PASSKEY_PATH")
-UBANK_PASS = os.environ.get("UBANK_PASS")
-SHARED_SAVE_ACCOUNT_ID = os.environ.get("SHARED_SAVE_ACCOUNT_ID")
-SHARED_SPEND_ACCOUNT_ID = os.environ.get("SHARED_SPEND_ACCOUNT_ID")
-RENT_TABLE = "rent_payments"
-TRANSACTION_TABLE = "transactions"
+class DataSource(Enum):
+    UBANK_CSV = "ubank"
+    NP_CSV    = "npbs"
+    MB_CSV    = "macbank"
 
-assert SQLITE_URL
-assert CUSTOMER_ID
-assert HUGH_ACCOUNT_ID
-assert PASSKEY_PATH
-assert UBANK_PASS
-assert isinstance(SQLITE_URL, str)
+    def __str__(self):
+        return self.value
 
+class BaseTransactionParser(ABC):
+    """Abstract base class for bank specific parsers"""
+    
+    @abstractmethod
+    def process_transactions(
+        self, file_path: str, user: Optional[str]
+    ) -> list[Transaction]:
+        pass
 
-con = sqlite3.connect(SQLITE_URL)
-cur = con.cursor()
+class UbankParser(BaseTransactionParser):
+    def process_transactions(
+        self, file_path: str, user: Optional[str]
+    ) -> list[Transaction]:
+        expected_fields = ["Date","Description","Debit","Credit","Balance"]
+        expected_date_format = "%d %b %Y"
+        transactions = []
+        with open(file_path, mode="r") as f:
+            reader = csv.DictReader(f)
+            for record in reader:
+                try:
+                    if "Debit" in record:
+                        amount_in_cents = get_amount_in_cents(record["Debit"]) * -1
+                    elif "Credit" in record:
+                        amount_in_cents = get_amount_in_cents(record["Credit"])
+                    else:
+                        print(f"Failed to find 'Debit' or 'Credit' amount in transaction={record}")
+                        continue
+    
+                    if not (date := record.get("Date")):
+                        print(f"Failed to find 'Date' in transaction={record}")
+                    assert isinstance(date, str)
+    
+                    transactions.append(
+                        Transaction(
+                            account_id="",
+                            transaction_id="",
+                            account_name="",
+                            amount=amount_in_cents,
+                            time=get_date_as_timestamp(date, expected_date_format),
+                            vendor="",
+                            category="",
+                            location="",
+                            description=record.get("Description", ""),
+                            balance=record.get("Balance", ""),
+                            user=user if user else "",
+                            original_record=str(record)
+                        )
+                    )
+    
+                except KeyError as e:
+                    print(f"Failed to find '{e}' among expected fields: {expected_fields}")
+                    exit(1)
+    
+        return transactions
 
-with open(PASSKEY_PATH, "rb") as f:
-    passkey = Passkey.load(f, password=UBANK_PASS)
+class MbParser(BaseTransactionParser):
+    def process_transactions(
+        self, file_path: str, user: Optional[str]
+    ) -> list[Transaction]:
+        expected_fields = ["Transaction Date","Details","Account","Category","Subcategory","Tags","Notes","Debit","Credit","Balance","Original Description"]
+        expected_date_format = "%d %b %Y"
+        transactions = []
+        with open(file_path, mode="r") as f:
+            reader = csv.DictReader(f)
+            for record in reader:
+                try:
+                    if record.get("Account") != "My spend":
+                        print(f"Not associated with spend account, skipping transaction={record}")
+    
+                    if "Debit" in record:
+                        amount_in_cents = get_amount_in_cents(record["Debit"]) * -1
+                    elif "Credit" in record:
+                        amount_in_cents = get_amount_in_cents(record["Credit"])
+                    else:
+                        print(f"Failed to find 'Debit' or 'Credit' amount in transaction={record}")
+                        continue
+    
+                    if not (date := record.get("Transaction Date")):
+                        print(f"Failed to find 'Transaction Date' in transaction={record}")
+                    assert isinstance(date, str)
+    
+                    transactions.append(
+                        Transaction(
+                            account_id="",
+                            transaction_id="",
+                            account_name="",
+                            amount=amount_in_cents,
+                            time=get_date_as_timestamp(date, expected_date_format),
+                            vendor="",
+                            category=record.get("Category", ""),
+                            location="",
+                            description=record.get("Details", record.get("Original Description", "")),
+                            balance=record.get("Balance", ""),
+                            user=user if user else "",
+                            original_record=str(record)
+                        )
+                    )
+    
+                except KeyError as e:
+                    print(f"Failed to find '{e}' among expected fields: {expected_fields}")
+                    exit(1)
+    
+        return transactions
 
+class NpParser(BaseTransactionParser):
+    def process_transactions(
+        self, file_path: str, user: Optional[str]
+    ) -> list[Transaction]:
+        expected_fields = ["Date","Description","Amount","Balance"]
+        expected_date_format = "%d/%m/%Y"
+        transactions = []
+        date_idx = desc_idx = amt_idx = bal_idx = None
+        with open(file_path, mode="r") as f:
+            reader = csv.reader(f)
+    
+            for record in reader:
+                try:
+                    # Skip bs in stupid csv-not-csv
+                    if date_idx is None:
+                        if all([f in record for f in expected_fields]):
+                            date_idx = record.index("Date")
+                            desc_idx = record.index("Description")
+                            amt_idx = record.index("Amount")
+                            bal_idx = record.index("Balance")
+                        continue
+                    if not (desc_idx and amt_idx and bal_idx):
+                        print("Failed to find expected fields")
+                        exit(1)
+    
+                    if len(record) <= max(date_idx, desc_idx, amt_idx):
+                        print(f"Skipping malformed line={record}")
+                        continue
+    
+                    date_val = record[date_idx]
+                    desc_val = record[desc_idx]
+                    amt_val = record[amt_idx]
+                    bal_val = record[bal_idx]
+    
+                    if amt_val:
+                        amount_in_cents = get_amount_in_cents(amt_val)
+                    else:
+                        print(f"Failed to find 'Amount' in transaction={record}")
+                        continue
+    
+                    if not date_val:
+                        print(f"Failed to find 'Date' in transaction={record}")
+    
+                    transactions.append(
+                        Transaction(
+                            account_id="",
+                            transaction_id="",
+                            account_name="",
+                            amount=amount_in_cents,
+                            time=get_date_as_timestamp(date_val, expected_date_format),
+                            vendor="",
+                            category="",
+                            location="",
+                            description=desc_val,
+                            balance=bal_val,
+                            user=user if user else "shared",
+                            original_record=str(record)
+                        )
+                    )
+    
+                except KeyError as e:
+                    print(f"Failed to find '{e}' among expected fields: {expected_fields}")
+                    exit(1)
+    
+        return transactions
 
-def get_plebs() -> dict[str, int]:
-    res = cur.execute("SELECT name, discord_id FROM renter")
-    plebs = res.fetchall()
+# Helpers
 
-    pleb_info = {}
-    for pleb_name, pleb_id in plebs:
-        pleb_info[pleb_name] = pleb_id
-    print(f"pleb_names={pleb_info}")
-    return pleb_info
+def get_amount_in_cents(dollar_amount_string: str) -> int:
+    amt = dollar_amount_string.strip().replace("$", "").replace(",", "")
+    if "." in amt:
+        dollars, cents = amt.split(".", 1)
+        cents = (cents + "00")[:2]
+        return int(dollars + cents)
+    else:
+        return int(amt + "00")
 
+def get_date_as_timestamp(date: str, fmt: str) -> int:
+    try:
+        dt = datetime.strptime(date, fmt)
+        return int(dt.timestamp())
+    except Exception:
+        print(f"Failed to convert date={date} according to expected format={fmt}")
+        exit(1)
 
-def get_all_transaction_ids_from_table(
-    table: str,
-) -> set[str]:
-    ids = cur.execute(f"SELECT transaction_id  FROM {table}").fetchall()
-    ids = [x[0] for x in ids if x[0] != "" and x[0] != "backfilling data"]
-    return set(ids)
+def get_parser_for_datasource(source: DataSource) -> BaseTransactionParser:
+    try:
+        match source:
+            case DataSource.UBANK_CSV:
+                return UbankParser()
+            case DataSource.MB_CSV:
+                return MbParser()
+            case DataSource.NP_CSV:
+                return NpParser()
 
+    except KeyError:
+        raise ValueError(f"No parser implemented for unknown datasource={source}")
 
-def get_vendor_and_categories() -> dict[str, str]:
-    vendors = cur.execute("SELECT vendor, category FROM transactions").fetchall()
-    v = {}
-    for vendor, category in vendors:
-        v[vendor] = category
-    return v
+def insert_bulk_transactions(transactions: list[Transaction]) -> None:
+    if not transactions:
+        return
 
+    # Define time interval which transactions span
+    min_time = min(transactions, key=lambda t: t.time).time
+    max_time = max(transactions, key=lambda t: t.time).time
+    
+    # Define existing transactions in table, for which this run should not add duplicates
+    cur.execute(
+        f"SELECT hash FROM {TRANSACTION_TABLE} WHERE time >= ? AND time <= ?",
+        (min_time, max_time)
+    )
+    rows = cur.fetchall()
+    # Actual value is first in tuple
+    hashes_to_not_duplicate = set([r[0] for r in rows])
+    transactions_to_insert = [t.to_tuple() for t in transactions if t.hash not in hashes_to_not_duplicate]
 
-def store_pleb_transactions_in_db():
-    pleb_info = get_plebs()
-    all_transaction_ids = get_all_transaction_ids_from_table(RENT_TABLE)
-    with Client(passkey) as client:
-        transactions_to_insert = []
-        now = int(time.time())
-        for tran in client.search_account_transactions(
-            account_id=HUGH_ACCOUNT_ID,
-            bank_id=BANK_ID,
-            customerId=CUSTOMER_ID,
-        ).transactions:
-            if tran.id in all_transaction_ids:
-                continue
-            if not tran.from_ or not tran.from_.legalName:
-                print(f"transaction had no legal name t={tran}")
-                continue
-            if not tran.value:
-                continue
-
-            pleb_name = tran.from_.legalName
-            if pleb_name not in pleb_info:
-                continue
-
-            pleb_id = pleb_info[pleb_name]
-
-            payment_in_cents = int(float(tran.value.amount) * 100)
-
-            transactions_to_insert.append((pleb_id, payment_in_cents, now, tran.id))
-
-        cur.executemany(
-            f""" INSERT INTO {RENT_TABLE} VALUES (?, ?, ?, ?);""",
-            transactions_to_insert,
-        )
-        con.commit()
-        print(f"Saved {len(transactions_to_insert)} in db")
-
-
-def get_all_bank_accounts():
-    with Client(passkey) as client:
-        banks = client.get_linked_banks()
-        for b in banks.linkedBanks:
-            for a in b.accounts:
-                print(a.model_dump_json())
-
-
-def store_saving_and_spend_transactions():
-    all_transaction_ids = get_all_transaction_ids_from_table(TRANSACTION_TABLE)
-    vendors = get_vendor_and_categories()
-    with Client(passkey) as client:
-        transactions_to_insert = []
-        transactions = client.search_account_transactions(
-            account_id=SHARED_SAVE_ACCOUNT_ID,
-            bank_id=BANK_ID,
-            customerId=CUSTOMER_ID,
-        ).transactions
-        transactions.extend(
-            client.search_account_transactions(
-                account_id=SHARED_SPEND_ACCOUNT_ID,
-                bank_id=BANK_ID,
-                customerId=CUSTOMER_ID,
-                limit=5,
-            ).transactions
-        )
-        for tran in transactions:
-            if tran.id in all_transaction_ids:
-                continue
-            if not tran.value:
-                continue
-            if not tran.posted:
-                print(f"transaction not posted for id={tran.id}")
-                continue
-
-            source = (
-                tran.from_.legalName
-                if tran.from_ and tran.from_.legalName
-                else "bonus interest"
-            )
-
-            payment_in_cents = int(float(tran.value.amount) * 100)
-
-            tran_time = int(tran.posted.timestamp())
-
-            if tran.lwc:
-                tran_vendor = tran.lwc.get("merchantName", "")
-                tran_location = tran.lwc.get("merchantLocation", "")
-                transaction = Transaction(
-                    tran.accountId,
-                    tran.id,
-                    source,
-                    payment_in_cents,
-                    tran_time,
-                    tran_vendor,
-                    "",
-                    tran_location,
-                    tran.shortDescription if tran.shortDescription else "",
-                )
-            else:
-                transaction = Transaction(
-                    tran.accountId,
-                    tran.id,
-                    source,
-                    payment_in_cents,
-                    tran_time,
-                    "",
-                    "Debit",
-                    "",
-                    "",
-                )
-
-            transactions_to_insert.append(transaction)
-
-    # TODO
-    categorize_transactions(vendors, transactions_to_insert)
+    if (transactions_count := len(transactions_to_insert)) > 0:
+        print(f"About to insert {transactions_count} unique records out of {len(transactions)} total records...")
+    else:
+        print("No new transactions to insert.")
+        return
 
     cur.executemany(
         f"""
         INSERT INTO {TRANSACTION_TABLE} VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         );
         """,
-        [t.to_tuple() for t in transactions_to_insert],
+        transactions_to_insert
     )
     con.commit()
 
+def get_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Read CSVs containing historical transactions"
+    )
 
-def categorize_transactions(
-    vendors: dict[str, str], transactions: list[Transaction]
-) -> None:
+    file_or_directory_group = parser.add_mutually_exclusive_group(required=True)
+    file_or_directory_group.add_argument(
+        "-f",
+        "--file",
+        help="file paths to read"
+    )
+    file_or_directory_group.add_argument(
+        "-d",
+        "--directory",
+        help=f"directory containing subdirectories named like: {[e.value for e in DataSource]}"
+    )
 
-    def _enforce_input_schema(t: Transaction) -> agent.TransactionInput:
-        return agent.TransactionInput(
-            account_id=t.account_id,
-            transaction_id=t.transaction_id,
-            amount=t.amount,
-            source=t.source,
-            time=t.time,
-            vendor=t.vendor,
-            location=t.location,
-            description=t.description,
-        )
-
-    transactions_to_categorize: list[agent.TransactionInput] = []
-    for t in transactions:
-        if t.category:
-            continue
-        if t.vendor in vendors:
-            t.category = vendors[t.vendor]
-            continue
-
-        transactions_to_categorize.append(
-            _enforce_input_schema(t)
-        )  # Agent requires Pydantic base model as input
-
-    if transactions_to_categorize:
-        agent_output = agent.categorize_transactions(transactions_to_categorize)
-        if agent_output:
-            category = {e["transaction_id"]: e["category"] for e in agent_output}
-            for t in transactions:
-                if not t.category:
-                    t.category = category[t.transaction_id]
-
+    parser.add_argument(
+        "-s",
+        "--src",
+        type=DataSource,
+        choices=list(DataSource),
+        help="type of transaction data source (required if using -f)"
+    )
+    parser.add_argument(
+        "-u",
+        "--user",
+        type=str,
+        choices=VALID_USERS,
+        help="user to record on db save (hint: set comma-delimited USERS in .env)"
+    )
+    parser.add_argument(
+        "-n",
+        "--dry-run",
+        action="store_true",
+        help="set if you do not want to insert to db, just print"
+    )
+    return parser.parse_args()
 
 if __name__ == "__main__":
-    store_saving_and_spend_transactions()
-    store_pleb_transactions_in_db()
+    args = get_args()
+
+    # Parse csv
+    transactions_to_insert = []
+
+    # TODO Default user
+    if args.directory:
+        for source in DataSource:
+            dir_path = os.path.join(args.directory, source.value)
+            if os.path.isdir(dir_path):
+                if args.user is None:
+                    if source == DataSource.NP_CSV:
+                        print("No user provided, defaulting to 'shared' for datasource=npbs")
+                    else:
+                        print(f"Skipping directory '{source.value}': --user must be provided unless --src=npbs")
+                        continue
+                
+                for filename in os.listdir(dir_path):
+                    if filename.lower().endswith(".csv"):
+                        filepath = os.path.join(dir_path, filename)
+                        transactions_to_insert.extend(
+                            get_parser_for_datasource(source).process_transactions(filepath, args.user)
+                        )
+    else:
+        # Validation
+        if args.user is None:
+            if args.src == DataSource.NP_CSV:
+                print("No user provided, defaulting to 'shared' for datasource=npbs")
+            else:
+                print("--user must be provided unless --src=npbs")
+                exit(1)
+        transactions_to_insert = get_parser_for_datasource(args.src).process_transactions(file_path=args.file, user=args.user)
+
+    # Persist to db
+    if args.dry_run:
+        for t in transactions_to_insert:
+            print(t)
+    else:
+        if not SQLITE_URL:
+            raise ValueError("Failed to find SQLITE_URL in .env")
+    
+        con = sqlite3.connect(SQLITE_URL)
+        cur = con.cursor()
+        try:
+            insert_bulk_transactions(transactions_to_insert)
+        finally:
+            cur.close()
+            con.close()
